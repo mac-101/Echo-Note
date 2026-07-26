@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% load component_tags %}
+
+{% block content %}
+<!-- One UI Signature Soft Gray Canvas -->
+<div class="min-h-screen bg-[#f3f4f6] px-4 py-12 md:p-8 font-sans antialiased text-slate-800">
+    <div class="max-w-3xl mx-auto space-y-6">
+        
+        <!-- Large Upper Display Title Layout -->
+        <div class="pt-8 pb-4 px-2 flex justify-between items-end">
+            <div>
+                <h1 class="text-3xl font-semibold tracking-tight text-slate-900">Reminders</h1>
+                <p class="text-xs font-medium text-gray-400 mt-1">
+                    {{ tasks|length }} items total
+                </p>
+            </div>
+            <div>
+                <a class="px-5 py-2 rounded-full bg-sky-600 text-white text-xs font-semibold hover:bg-sky-700 transition-colors shadow-sm shadow-sky-600/10 cursor-pointer" href={% if in_completed %}{% url "home" %}{% else %}{% url "task_completed" %}{% endif %}   >{% if in_completed %}Tasks{% else %}Completed Task{% endif %}</a>
+                <button id="openModalBtn" type="button" class="px-5 py-2 rounded-full bg-sky-600 text-white text-xs font-semibold hover:bg-sky-700 transition-colors shadow-sm shadow-sky-600/10 cursor-pointer">
+                + Add
+            </button>
+        </div>
+        </div>
+
+        <!-- Task List Stack Layout -->
+        <div class="flex flex-col gap-2">
+            {% for single_task in tasks %}
+                {% component 'task_card' task=single_task %}{% endcomponent %}
+            {% empty %}
+                <div class="flex flex-col items-center justify-center py-16 text-center">
+                    <p class="text-gray-400 text-xs font-medium tracking-wide">No reminders yet</p>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Bottom Sheet Mobile Style Centered Overlay Dialog -->
+<div id="taskModal" class="hidden fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-xs p-0 md:p-4">
+    <div class="bg-white rounded-t-3xl md:rounded-2xl shadow-xl w-full max-w-md p-6 relative space-y-5 transform transition-transform max-h-[85vh] overflow-y-auto">
+        
+        <div class="flex justify-between items-center">
+            <h2 class="text-base font-semibold tracking-tight text-slate-900">New reminder</h2>
+            <button id="closeModalBtn" type="button" class="text-gray-400 hover:text-gray-600 text-xl font-bold cursor-pointer">&times;</button>
+        </div>
+
+        <form action="{% url 'add_task' %}" method="POST" class="space-y-5">
+            {% csrf_token %}
+            <div class="space-y-3 text-xs form-container">
+                {{ form.as_p }}
+            </div>
+
+            <div class="flex justify-end gap-2 pt-2">
+                <button id="cancelModalBtn" type="button" class="px-4 py-2 rounded-full bg-gray-100 text-gray-600 font-semibold text-xs hover:bg-gray-200 transition-colors cursor-pointer">
+                    Cancel
+                </button>
+                <button type="submit" class="px-4 py-2 rounded-full bg-sky-600 text-white font-semibold text-xs hover:bg-sky-700 transition-colors cursor-pointer">
+                    Save
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Inline CSS For Injecting Form Input Cleaners -->
+<style>
+    .form-container p {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        margin-bottom: 0.75rem;
+    }
+    .form-container label {
+        font-weight: 600;
+        color: #475569;
+    }
+    .form-container input, 
+    .form-container textarea, 
+    .form-container select {
+        width: 100%;
+        padding: 0.625rem 0.875rem;
+        font-size: 13px;
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.75rem;
+        color: #1e293b;
+        transition: all 0.15s ease;
+    }
+    .form-container input:focus, 
+    .form-container textarea:focus {
+        outline: none;
+        background-color: #ffffff;
+        border-color: #0284c7;
+        box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.06);
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const modal = document.getElementById('taskModal');
+    const openBtn = document.getElementById('openModalBtn');
+    const closeBtn = document.getElementById('closeModalBtn');
+    const cancelBtn = document.getElementById('cancelModalBtn');
+
+    const openModal = () => {
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+    };
+    const closeModal = () => {
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+    };
+
+    openBtn.addEventListener('click', openModal);
+    closeBtn.addEventListener('click', closeModal);
+    cancelBtn.addEventListener('click', closeModal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeModal();
+        }
+    });
+});
+</script>
+{% endblock %}
