@@ -1,0 +1,8 @@
+<article class="note-card {% if note.is_pinned %}is-pinned{% endif %}">
+    <a class="note-card-link" href="{% url 'note_detail' note.pk %}">
+        <div class="note-card-top"><time datetime="{{ note.updated_at|date:'c' }}">{{ note.updated_at|date:'H:i' }}</time>{% if note.is_pinned %}<span class="pin-dot" title="Pinned" aria-label="Pinned">*</span>{% endif %}</div>
+        <h2>{{ note.title }}</h2>
+        <p>{{ note.content|truncatechars:180|default:'No content' }}</p>
+        {% if note.updated_at|date:'Y-m-d' != note.created_at|date:'Y-m-d' %}<small>Edited {{ note.updated_at|date:'M j' }}</small>{% endif %}
+    </a>
+</article>

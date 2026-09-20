@@ -1,0 +1,38 @@
+{% extends 'Note/base.html' %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block body_class %}editor-body{% endblock %}
+{% block content %}
+<section class="form-page">
+    <form class="note-form" method="post">
+        {% csrf_token %}
+        <div class="editor-sticky-head">
+            <div class="editor-head-row">
+                <p class="eyebrow">{{ page_title }}</p>
+                <div class="editor-tools" aria-label="Note actions">
+                    <button class="editor-icon" type="button"  aria-label="Audio notes coming soon" title="Audio notes coming soon">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8"/></svg>
+                    </button>
+                    <label class="editor-icon" for="note-import" aria-label="Import text" title="Import text">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+                    </label>
+                    <input id="note-import" class="visually-hidden" type="file" accept=".txt,text/plain">
+                    <button class="editor-icon" type="submit" aria-label="Save note" title="Save note">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-6h8v6"/></svg>
+                    </button>
+                    <a class="editor-icon" href="{% if note %}{% url 'note_detail' note.pk %}{% else %}{% url 'note_list' %}{% endif %}" aria-label="Cancel" title="Cancel">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                    </a>
+                </div>
+            </div>
+            <div class="field-group title-field{% if form.title.errors %} has-error{% endif %}">
+                {{ form.title }}
+                {% for error in form.title.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+            </div>
+        </div>
+        <div class="field-group content-field{% if form.content.errors %} has-error{% endif %}">
+            {{ form.content }}
+            {% for error in form.content.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+        </div>
+    </form>
+</section>
+{% endblock %}

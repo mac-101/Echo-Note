@@ -1,0 +1,50 @@
+{% extends 'Note/base.html' %}
+{% block title %}All notes{% endblock %}
+{% block header_action %}{% endblock %}
+{% block content %}
+<section class="page-heading">
+    <div>
+        {% comment %} <p class="desktop-kicker">Workspace overview</p> {% endcomment %}
+        <h1>All notes</h1>
+        {% if total_notes %}<p class="note-count">{{ total_notes }} note{{ total_notes|pluralize }}</p>{% endif %}
+    </div>
+</section>
+
+<nav class="quick-actions" aria-label="Note actions">
+    <button class="icon-button menu-button" type="button" aria-label="Open menu"><span></span><span></span><span></span></button>
+    <span class="quick-spacer"></span>
+    <form class="search-popover" method="get" role="search">
+        <label for="search-input">Search notes</label>
+        <input id="search-input" type="search" name="q" value="{{ query }}" placeholder="           Click ENTER to search" autocomplete="off">
+        <a class="clear-search" href="{% url 'note_list' %}" aria-label="Clear search">x</a>
+    </form>
+    <button class="icon-button search-button" type="button" aria-label="Search notes">⌕</button>
+    <a class="icon-button more-button" href="{% url 'note_create' %}" aria-label="Create a new note" title="New note">+</a>
+</nav>
+
+{% if has_notes %}
+    {% for label, group in note_groups %}
+    <section class="note-section">
+        <div class="section-label"><span>{{ label }}</span></div>
+        <div class="note-grid">
+            {% for note in group %}{% include 'Note/note_card.html' with note=note %}{% endfor %}
+        </div>
+    </section>
+    {% endfor %}
+{% elif query %}
+    <section class="empty-state">
+        <div class="empty-icon" aria-hidden="true">⌕</div>
+        <h2>No matching notes</h2>
+        <p>Try a different search term.</p>
+        <a class="button button-secondary" href="{% url 'note_list' %}">Show all notes</a>
+    </section>
+{% else %}
+    <section class="empty-state">
+        
+        <h2>No notes yet</h2>
+        <p>Capture an idea before it gets away.</p>
+        <a class="button button-primary" href="{% url 'note_create' %}">Create your first note</a>
+    </section>
+{% endif %}
+<a class="floating-compose" href="{% url 'note_create' %}" aria-label="Create a new note" title="Create a new note">&#9998;</a>
+{% endblock %}

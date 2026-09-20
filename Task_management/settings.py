@@ -37,8 +37,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'Tasks',
     'django_components',
+    'Note.apps.NoteConfig',
 ]
 
 MIDDLEWARE = [
@@ -76,12 +76,6 @@ TEMPLATES = [
     },
 ]
 
-COMPONENTS = {
-    "autodiscover": True,
-    "libraries": [
-        "templates.components.task_card.task_card",
-    ]
-}
 
 WSGI_APPLICATION = 'Task_management.wsgi.application'
 

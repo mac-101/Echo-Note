@@ -1,0 +1,41 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Notes{% endblock %} · Notes</title>
+    <link rel="stylesheet" href="{% static 'Note/style.css' %}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+    <div class="app-shell">
+        <aside class="desktop-sidebar">
+            <a class="sidebar-brand" href="{% url 'note_list' %}">
+                <span class="brand-mark" aria-hidden="true">Echo</span>
+                <span>Notes</span>
+            </a>
+            <nav class="sidebar-nav" aria-label="Main navigation">
+                <a class="sidebar-link is-active" href="{% url 'note_list' %}"><span aria-hidden="true">▤</span> All notes</a>
+                <a class="sidebar-link" href="{% url 'note_create' %}"><span aria-hidden="true">＋</span> New note</a>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme"><span aria-hidden="true">☼</span><span class="theme-label">Appearance</span></button>
+            </div>
+        </aside>
+        <header class="app-header">
+            <a class="brand" href="{% url 'note_list' %}"><span class="brand-mark" aria-hidden="true">N</span><span>Notes</span></a>
+            <button class="theme-toggle mobile-theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme"><span aria-hidden="true">☼</span></button>
+            {% block header_action %}{% endblock %}
+        </header>
+
+        {% if messages %}
+            <div class="messages" aria-live="polite">
+                {% for message in messages %}<div class="message">{{ message }}</div>{% endfor %}
+            </div>
+        {% endif %}
+
+        <main>{% block content %}{% endblock %}</main>
+    </div>
+    <script src="{% static 'Note/app.js' %}"></script>
+</body>
+</html>
