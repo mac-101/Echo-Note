@@ -64,6 +64,12 @@ button, .button, .text-action, .icon-button { -webkit-tap-highlight-color: trans
 .search-popover label { height: 1px; overflow: hidden; position: absolute; width: 1px; }
 .search-popover input { background: transparent; border: 0; color: var(--ink); flex: 1; min-width: 0; outline: 0; padding: 11px 4px; }
 .clear-search { color: var(--muted); padding: 3px 6px; }
+.backup-menu { position: relative; }
+.backup-popover { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); display: grid; gap: 4px; padding: 8px; position: absolute; right: 0; top: 42px; width: 150px; z-index: 5; }
+.backup-popover button { background: transparent; border: 0; border-radius: 7px; color: var(--ink); cursor: pointer; font-size: .82rem; padding: 9px 10px; text-align: left; }
+.backup-popover button:hover { background: var(--surface-raised); }
+.storage-status { color: var(--muted); font-size: .78rem; min-height: 1.2em; margin: 0 0 18px; }
+.storage-status.is-error { color: var(--danger); }
 .note-section { margin-bottom: 38px; }
 .section-label { color: var(--ink); font-size: 1.1rem; font-weight: 700; margin-bottom: 18px; }
 .note-grid { display: grid; gap: 14px; }

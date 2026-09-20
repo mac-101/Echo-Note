@@ -17,7 +17,7 @@ This project is the first phase of a larger voice-enabled note-taking applicatio
 * Pinned notes section
 * Responsive design
 * Mobile-friendly interface
-* Django-powered database persistence
+* Local-first browser persistence with one-time SQLite migration
 * iOS-inspired user interface
 
 ### Planned
@@ -44,8 +44,8 @@ This project is the first phase of a larger voice-enabled note-taking applicatio
 * HTML
 * CSS
 * Vanilla JavaScript
-* SQLite for local development
-* PostgreSQL for production
+* Browser localStorage for normal note operations
+* SQLite retained as a migration source for existing notes
 
 Future versions may use a locally installed speech-to-text model such as Whisper or a faster Whisper implementation.
 
@@ -182,6 +182,9 @@ Replace `project` with the actual Django project package name.
 * [x] Note search
 * [x] Pin/unpin
 * [x] Responsive UI
+* [x] Local-first browser storage
+* [x] SQLite-to-localStorage migration
+* [x] JSON import and export backups
 
 ### Phase 2
 

@@ -3,7 +3,7 @@
 {% block body_class %}editor-body{% endblock %}
 {% block content %}
 <section class="form-page">
-    <form class="note-form" method="post">
+    <form class="note-form" method="post" data-note-form data-note-id="{{ note_id|default:'' }}">
         {% csrf_token %}
         <div class="editor-sticky-head">
             <div class="editor-head-row">

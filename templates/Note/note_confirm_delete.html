@@ -1,12 +1,12 @@
 {% extends 'Note/base.html' %}
 {% block title %}Delete note{% endblock %}
-{% block header_action %}<a class="button button-secondary" href="{% url 'note_detail' note.pk %}">Cancel</a>{% endblock %}
+{% block header_action %}<a class="button button-secondary" href="{% url 'note_detail' note_id %}">Cancel</a>{% endblock %}
 {% block content %}
-<section class="confirm-page">
+<section class="confirm-page" data-delete-page data-note-id="{{ note_id }}">
     <p class="eyebrow">Delete note</p>
-    <h1>Delete &quot;{{ note.title }}&quot;?</h1>
+    <h1>Delete &quot;<span data-delete-title>{{ note.title }}</span>&quot;?</h1>
     <p>This note will be permanently removed. This action can't be undone.</p>
-    <form method="post">{% csrf_token %}
+    <form method="post" data-delete-form>{% csrf_token %}
         <button class="button button-danger button-wide" type="submit">Delete note</button>
     </form>
 </section>
