@@ -83,8 +83,11 @@ button, .button, .text-action, .icon-button { -webkit-tap-highlight-color: trans
 .note-card p { color: var(--ink); font-size: 1.08rem; line-height: 1.55; margin: 0; overflow-wrap: anywhere; }
 .note-card small { display: block; font-size: .8rem; margin-top: 15px; }
 .pin-dot { color: var(--accent); font-size: 1.1rem; }
-.floating-compose { align-items: center; background: var(--surface-raised); border: 1px solid var(--line); border-radius: 50%; bottom: 22px; box-shadow: 0 8px 18px rgba(0, 0, 0, .3); color: var(--ink); display: flex; font-size: 2rem; height: 64px; justify-content: center; position: fixed; right: max(22px, calc((100vw - 640px) / 2)); width: 64px; z-index: 4; }
-.floating-compose:hover { color: var(--accent); transform: scale(1.04); }
+.floating-actions { bottom: 22px; display: grid; gap: 12px; position: fixed; right: max(22px, calc((100vw - 640px) / 2)); z-index: 4; }
+.floating-action { align-items: center; background: var(--surface-raised); border: 1px solid var(--line); border-radius: 50%; box-shadow: 0 8px 18px rgba(0, 0, 0, .3); color: var(--ink); display: flex; height: 58px; justify-content: center; padding: 0; transition: color .2s, opacity .2s, transform .2s; width: 58px; }
+.floating-action svg { fill: none; height: 23px; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; width: 23px; }
+.floating-note:hover { color: var(--accent); transform: scale(1.04); }
+.floating-voice { color: var(--muted); cursor: not-allowed; opacity: .6; }
 .empty-state { margin: 8vh auto 0; max-width: 360px; text-align: center; }
 .empty-icon { align-items: center; background: var(--surface-raised); border-radius: 16px; color: var(--accent); display: flex; font-size: 1.6rem; height: 56px; justify-content: center; margin: 0 auto 20px; width: 56px; }
 .empty-state h2 { font-size: 1.35rem; letter-spacing: -.02em; margin-bottom: 7px; }
@@ -114,6 +117,34 @@ button, .button, .text-action, .icon-button { -webkit-tap-highlight-color: trans
 .editor-icon.icon-danger:hover { color: var(--danger); }
 .editor-icon svg { fill: none; height: 21px; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; width: 21px; }
 .visually-hidden { height: 1px; opacity: 0; overflow: hidden; position: absolute; width: 1px; }
+.editor-icon.is-recording { color: var(--accent); }
+.editor-icon.is-recording svg { animation: recording-pulse 1.2s ease-in-out infinite; }
+.recording-panel { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; bottom: 18px; box-shadow: var(--shadow); display: grid; gap: 12px; grid-template-columns: auto 1fr auto auto; left: 16px; padding: 12px 14px; position: fixed; right: 16px; z-index: 10; }
+.recording-panel[hidden] { display: none; }
+.recording-info { align-items: center; display: flex; gap: 8px; }
+.recording-info time { color: var(--ink); font-variant-numeric: tabular-nums; font-size: .9rem; }
+.recording-dot { background: var(--danger); border-radius: 50%; height: 8px; width: 8px; }
+.recording-waveform { display: block; height: 48px; min-width: 0; width: 100%; }
+.recording-actions { align-items: center; display: flex; gap: 8px; }
+.recording-icon { align-items: center; background: transparent; border: 0; border-radius: 50%; color: var(--ink); cursor: pointer; display: inline-flex; height: 36px; justify-content: center; padding: 7px; width: 36px; }
+.recording-icon:hover { background: var(--surface-raised); color: var(--accent); }
+.recording-icon svg { fill: none; height: 20px; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; width: 20px; }
+.recording-stop { background: var(--danger); color: white; }
+.recording-stop:hover { background: var(--danger); color: white; filter: brightness(1.1); }
+.recording-stop.is-record-again { background: var(--surface-raised); color: var(--ink); }
+.recording-stop.is-record-again:hover { background: var(--surface-raised); color: var(--accent); filter: none; }
+.recording-icon:disabled { cursor: wait; opacity: .55; }
+.recording-icon[hidden] { display: none; }
+.record-again-icon { display: none; }
+.recording-stop.is-record-again > svg:first-child { display: none; }
+.recording-stop.is-record-again .record-again-icon { display: block; }
+.resume-icon { display: none; }
+.recording-icon.is-paused .pause-icon { display: none; }
+.recording-icon.is-paused .resume-icon { display: block; }
+.recording-status { color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.recording-status.is-transcribing { color: var(--accent); }
+.recording-error { color: var(--danger); font-size: .8rem; margin: 10px 0 0; min-height: 1.2em; }
+@keyframes recording-pulse { 50% { opacity: .45; } }
 .field-group label { color: var(--muted); font-size: .78rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .field-group input, .field-group textarea { background: transparent; border: 0; color: var(--ink); outline: 0; padding: 14px; resize: vertical; width: 100%; }
 .field-group.title-field input { font-size: clamp(1.7rem, 5vw, 2.35rem); font-weight: 300; line-height: 1.15; padding: 10px 0 16px; }
@@ -159,7 +190,8 @@ button, .button, .text-action, .icon-button { -webkit-tap-highlight-color: trans
     .note-card-link { min-height: 190px; padding: 23px 24px; }
     .note-card h2 { font-size: 1rem; }
     .note-card p { font-size: .98rem; }
-    .floating-compose { bottom: 34px; position: fixed; right: 42px; }
+    .floating-actions { bottom: 34px; right: 42px; }
+    .recording-panel { left: 50%; max-width: 640px; right: auto; transform: translateX(-50%); width: calc(100% - 32px); }
 }
 
 @media (min-width: 1000px) and (max-width: 1199px) {

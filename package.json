@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.0",
+    "whisper": "^0.3.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

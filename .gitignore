@@ -3,3 +3,55 @@ __pycache__/
 *.pyc
 .env
 staticfiles/
+
+# Python
+
+**pycache**/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+
+venv/
+.venv/
+env/
+ENV/
+
+# Django
+
+*.log
+db.sqlite3
+staticfiles/
+media/
+
+# Environment variables
+
+.env
+.env.*
+
+# Node
+
+node_modules/
+
+# IDE / editor
+
+.vscode/
+.idea/
+
+# OS
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build / cache
+
+*.tmp
+*.temp
+.cache/
+
+# Local AI / model caches
+
+.cache/
+huggingface/
+transformers_cache/

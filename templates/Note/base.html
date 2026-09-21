@@ -6,6 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Notes{% endblock %} · Notes</title>
     <link rel="stylesheet" href="{% static 'Note/style.css' %}">
+    <script type="importmap">
+    {
+        "imports": {
+            "onnxruntime-web/webgpu": "/static/Note/ort.webgpu.bundle.min.mjs"
+        }
+    }
+    </script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
     <div class="app-shell">
@@ -24,7 +31,6 @@
         </aside>
         <header class="app-header">
             <a class="brand" href="{% url 'note_list' %}"><span class="brand-mark" aria-hidden="true">N</span><span>Notes</span></a>
-            <button class="theme-toggle mobile-theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme" title="Switch theme"><span aria-hidden="true">☼</span></button>
             {% block header_action %}{% endblock %}
         </header>
 
@@ -36,6 +42,6 @@
 
         <main>{% block content %}{% endblock %}</main>
     </div>
-    <script src="{% static 'Note/app.js' %}?v=2"></script>
+    <script src="{% static 'Note/app.js' %}"></script>
 </body>
 </html>

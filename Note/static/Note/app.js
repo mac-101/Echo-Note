@@ -7,8 +7,12 @@ class NoteStorage {
         const rawNotes = localStorage.getItem(NOTES_STORAGE_KEY);
         if (!rawNotes) return [];
 
-        const notes = JSON.parse(rawNotes);
-        if (!Array.isArray(notes)) throw new Error('Saved notes have an invalid format.');
+        const savedNotes = JSON.parse(rawNotes);
+        if (!Array.isArray(savedNotes)) throw new Error('Saved notes have an invalid format.');
+
+        const notes = savedNotes.map((note) => this.normalizeNote(note));
+        const normalizedNotes = JSON.stringify(notes);
+        if (normalizedNotes !== rawNotes) localStorage.setItem(NOTES_STORAGE_KEY, normalizedNotes);
         return notes;
     }
 
@@ -149,6 +153,8 @@ class NoteStorage {
     }
 }
 
+// console.log('NEW APP.JS LOADED');
+
 document.addEventListener('DOMContentLoaded', async () => {
     const storage = new NoteStorage();
     const root = document.documentElement;
@@ -288,6 +294,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             backupPopover.hidden = true;
         });
         renderList();
+        return renderList;
     };
 
     const initializeEditor = () => {
@@ -326,6 +333,281 @@ document.addEventListener('DOMContentLoaded', async () => {
             const reader = new FileReader();
             reader.addEventListener('load', () => { contentInput.value = reader.result; });
             reader.readAsText(file);
+        });
+
+    };
+
+    const initializeAudioRecorder = () => {
+        const recordButton = document.querySelector('[data-record-button]');
+        const recordingPanel = document.querySelector('[data-recording-panel]');
+        const stopButton = document.querySelector('[data-recording-stop]');
+        const pauseButton = document.querySelector('[data-recording-pause]');
+        const timeElement = document.querySelector('[data-recording-time]');
+        const canvas = document.querySelector('[data-recording-waveform]');
+        const errorElement = document.querySelector('[data-recording-error]');
+        const recordingStatus = document.querySelector('[data-recording-status]');
+        const contentInput = document.querySelector('[data-note-form] [name="content"]');
+        if (!recordButton || !recordingPanel || !stopButton || !pauseButton || !timeElement || !canvas) return;
+
+        let mediaRecorder;
+        let mediaStream;
+        let audioContext;
+        let analyser;
+        let animationFrame;
+        let timer;
+        let startedAt;
+        let recordedAudioBlob = null;
+        let transcriptionPipeline;
+        let transcriptionPromise;
+        let elapsedBeforePause = 0;
+        const canvasContext = canvas.getContext('2d');
+
+        const showMessage = (message) => {
+            if (errorElement) errorElement.textContent = message;
+            const status = document.querySelector('[data-storage-status]');
+            if (status) {
+                status.textContent = message;
+                status.classList.add('is-error');
+            }
+        };
+
+        const updateTime = () => {
+            const elapsedSeconds = Math.floor((elapsedBeforePause + Date.now() - startedAt) / 1000);
+            const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, '0');
+            const seconds = String(elapsedSeconds % 60).padStart(2, '0');
+            timeElement.textContent = `${minutes}:${seconds}`;
+        };
+
+        const drawWaveform = () => {
+            if (!analyser) return;
+            const values = new Uint8Array(analyser.fftSize);
+            analyser.getByteTimeDomainData(values);
+            const width = canvas.width;
+            const height = canvas.height;
+            canvasContext.clearRect(0, 0, width, height);
+            canvasContext.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+            canvasContext.lineWidth = 2;
+            canvasContext.beginPath();
+            values.forEach((value, index) => {
+                const x = (index / (values.length - 1)) * width;
+                const y = ((value / 255) * height);
+                if (index === 0) canvasContext.moveTo(x, y);
+                else canvasContext.lineTo(x, y);
+            });
+            canvasContext.stroke();
+            animationFrame = requestAnimationFrame(drawWaveform);
+        };
+
+        const stopTracksAndAudio = () => {
+            if (animationFrame) cancelAnimationFrame(animationFrame);
+            if (timer) clearInterval(timer);
+            mediaStream?.getTracks().forEach((track) => track.stop());
+            if (audioContext && audioContext.state !== 'closed') audioContext.close();
+            mediaStream = null;
+            audioContext = null;
+            analyser = null;
+        };
+
+        const stopRecording = () => {
+            if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+            mediaRecorder.stop();
+            recordButton.classList.remove('is-recording');
+            recordButton.setAttribute('aria-label', 'Record audio');
+            recordButton.title = 'Record audio';
+            recordingPanel.hidden = false;
+            recordingStatus.textContent = 'Transcribing...';
+            recordingStatus.classList.add('is-transcribing');
+            stopButton.disabled = true;
+            pauseButton.disabled = true;
+            pauseButton.hidden = true;
+            stopTracksAndAudio();
+        };
+
+        const transcribeRecording = async (audioBlob) => {
+            try {
+                if (!transcriptionPipeline) {
+                    if (!transcriptionPromise) {
+                        const transformers = await import('/static/Note/transformers.bundle.js');
+                        transcriptionPromise = transformers.pipeline(
+                            'automatic-speech-recognition',
+                            'Xenova/whisper-tiny.en',
+                            {
+                                device: 'wasm',
+                                dtype: 'q8',
+                                progress_callback: (progress) => {
+                                    if (progress.status === 'progress' && progress.total) {
+                                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                                        recordingStatus.textContent = `Loading model ${percent}%`;
+                                    } else if (progress.status === 'initiate') {
+                                        recordingStatus.textContent = 'Loading Whisper model...';
+                                    }
+                                },
+                            },
+                        );
+                    }
+                    transcriptionPipeline = await transcriptionPromise;
+                }
+                recordingStatus.textContent = 'Transcribing...';
+                const audioContextForDecode = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioContextForDecode.decodeAudioData(await audioBlob.arrayBuffer());
+                const channel = await convertToWhisperAudio(audioBuffer);
+                const result = await transcriptionPipeline(channel, {
+                    chunk_length_s: 30,
+                    stride_length_s: 5,
+                    return_timestamps: false,
+                    no_speech_threshold: 0.6,
+                });
+                if (audioContextForDecode.state !== 'closed') audioContextForDecode.close();
+                const text = result?.text?.trim() || '(No speech detected)';
+                if (contentInput) {
+                    const existingText = contentInput.value.trim();
+                    contentInput.value = existingText ? `${existingText}\n\n${text}` : text;
+                    contentInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            } catch (error) {
+                showMessage(`Transcription failed: ${error.message || 'Unknown error.'}`);
+            } finally {
+                recordingStatus.textContent = 'Recording complete';
+                recordingStatus.classList.remove('is-transcribing');
+                stopButton.disabled = false;
+                stopButton.classList.add('is-record-again');
+                stopButton.setAttribute('aria-label', 'Record again');
+                stopButton.title = 'Record again';
+            }
+        };
+
+        const convertToWhisperAudio = async (audioBuffer) => {
+            const targetSampleRate = 16000;
+            if (audioBuffer.sampleRate === targetSampleRate && audioBuffer.numberOfChannels === 1) {
+                return cleanWhisperAudio(audioBuffer.getChannelData(0));
+            }
+
+            const targetLength = Math.ceil(audioBuffer.duration * targetSampleRate);
+            const offlineContext = new OfflineAudioContext(1, targetLength, targetSampleRate);
+            const source = offlineContext.createBufferSource();
+            const monoBuffer = offlineContext.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate);
+            const monoChannel = monoBuffer.getChannelData(0);
+            for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex += 1) {
+                const channelData = audioBuffer.getChannelData(channelIndex);
+                for (let sampleIndex = 0; sampleIndex < channelData.length; sampleIndex += 1) {
+                    monoChannel[sampleIndex] += channelData[sampleIndex] / audioBuffer.numberOfChannels;
+                }
+            }
+            source.buffer = monoBuffer;
+            source.connect(offlineContext.destination);
+            source.start();
+            const rendered = await offlineContext.startRendering();
+            return cleanWhisperAudio(rendered.getChannelData(0));
+        };
+
+        const cleanWhisperAudio = (audioData) => {
+            let peak = 0;
+            let firstVoiceSample = audioData.length;
+            let lastVoiceSample = 0;
+            const silenceThreshold = 0.012;
+
+            audioData.forEach((sample, index) => {
+                const amplitude = Math.abs(sample);
+                peak = Math.max(peak, amplitude);
+                if (amplitude > silenceThreshold) {
+                    firstVoiceSample = Math.min(firstVoiceSample, index);
+                    lastVoiceSample = index;
+                }
+            });
+
+            if (!peak || firstVoiceSample === audioData.length) return audioData;
+            const padding = 16000 * 0.15;
+            const start = Math.max(0, Math.floor(firstVoiceSample - padding));
+            const end = Math.min(audioData.length, Math.ceil(lastVoiceSample + padding));
+            const cleaned = audioData.slice(start, end);
+            const gain = Math.min(1.8, 0.75 / peak);
+            for (let index = 0; index < cleaned.length; index += 1) {
+                cleaned[index] = Math.max(-1, Math.min(1, cleaned[index] * gain));
+            }
+            return cleaned;
+        };
+
+        const startRecording = async () => {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder || !AudioContextClass) {
+                showMessage('Audio recording is not supported in this browser.');
+                return;
+            }
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    },
+                });
+                const chunks = [];
+                mediaRecorder = new MediaRecorder(mediaStream);
+                mediaRecorder.addEventListener('dataavailable', (event) => {
+                    if (event.data.size) chunks.push(event.data);
+                });
+                mediaRecorder.addEventListener('stop', () => {
+                    recordedAudioBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+                    recordButton.dataset.audioReady = 'true';
+                    transcribeRecording(recordedAudioBlob);
+                });
+                audioContext = new AudioContextClass();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                audioContext.createMediaStreamSource(mediaStream).connect(analyser);
+                mediaRecorder.start();
+                startedAt = Date.now();
+                timeElement.textContent = '00:00';
+                timer = setInterval(updateTime, 250);
+                recordingPanel.hidden = false;
+                recordingStatus.textContent = 'Recording';
+                recordingStatus.classList.remove('is-transcribing');
+                stopButton.disabled = false;
+                pauseButton.disabled = false;
+                pauseButton.hidden = false;
+                stopButton.classList.remove('is-record-again');
+                stopButton.setAttribute('aria-label', 'Stop recording');
+                stopButton.title = 'Stop recording';
+                elapsedBeforePause = 0;
+                pauseButton.classList.remove('is-paused');
+                recordButton.classList.add('is-recording');
+                recordButton.setAttribute('aria-label', 'Stop recording');
+                recordButton.title = 'Stop recording';
+                drawWaveform();
+            } catch (error) {
+                stopTracksAndAudio();
+                showMessage(error.name === 'NotAllowedError' ? 'Microphone permission was denied.' : 'The microphone could not be started.');
+            }
+        };
+
+        recordButton.addEventListener('click', () => {
+            if (mediaRecorder?.state === 'recording') stopRecording();
+            else startRecording();
+        });
+        pauseButton.addEventListener('click', () => {
+            if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+            if (mediaRecorder.state === 'recording') {
+                mediaRecorder.pause();
+                elapsedBeforePause += Date.now() - startedAt;
+                clearInterval(timer);
+                recordingStatus.textContent = 'Paused';
+                pauseButton.classList.add('is-paused');
+                pauseButton.setAttribute('aria-label', 'Resume recording');
+                pauseButton.title = 'Resume recording';
+            } else if (mediaRecorder.state === 'paused') {
+                mediaRecorder.resume();
+                startedAt = Date.now();
+                timer = setInterval(updateTime, 250);
+                recordingStatus.textContent = 'Recording';
+                pauseButton.classList.remove('is-paused');
+                pauseButton.setAttribute('aria-label', 'Pause recording');
+                pauseButton.title = 'Pause recording';
+            }
+        });
+        stopButton.addEventListener('click', () => {
+            if (stopButton.classList.contains('is-record-again')) startRecording();
+            else stopRecording();
         });
     };
 
@@ -371,13 +653,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     initializeTheme();
+    initializeAudioRecorder();
+    const refreshList = initializeList();
+    initializeEditor();
+    initializeDetail();
+    initializeDelete();
     try {
         const migration = await storage.migrate();
         if (migration.migrated && migration.imported) setStatus(`Imported ${migration.imported} existing note${migration.imported === 1 ? '' : 's'} from SQLite.`);
-        initializeList();
-        initializeEditor();
-        initializeDetail();
-        initializeDelete();
+        refreshList?.();
     } catch (error) {
         setStatus(`Storage migration failed: ${error.message}`, true);
     }
