@@ -347,7 +347,833 @@ document.addEventListener('DOMContentLoaded', async () => {
         const errorElement = document.querySelector('[data-recording-error]');
         const recordingStatus = document.querySelector('[data-recording-status]');
         const contentInput = document.querySelector('[data-note-form] [name="content"]');
-        if (!recordButton || !recordingPanel || !stopButton || !pauseButton || !timeElement || !canvas) return;
+        const cancelButton = document.querySelector('[data-recording-cancel]');
+
+        if (
+            !recordButton ||
+            !recordingPanel ||
+            !stopButton ||
+            !pauseButton ||
+            !timeElement ||
+            !canvas
+        ) {
+            return;
+        }
+
+        let mediaRecorder = null;
+        let mediaStream = null;
+        let audioContext = null;
+        let analyser = null;
+        let animationFrame = null;
+        let timer = null;
+        let startedAt = 0;
+        let recordedAudioBlob = null;
+
+        let transcriptionPipeline = null;
+        let transcriptionPromise = null;
+
+        let elapsedBeforePause = 0;
+        let cancelRequested = false;
+        let chunks = [];
+
+        const canvasContext = canvas.getContext('2d');
+
+        const showMessage = (message) => {
+            if (errorElement) {
+                errorElement.textContent = message;
+            }
+
+            const status = document.querySelector('[data-storage-status]');
+
+            if (status) {
+                status.textContent = message;
+                status.classList.add('is-error');
+            }
+        };
+
+        const updateTime = () => {
+            if (!startedAt) return;
+
+            const elapsedSeconds = Math.floor(
+                (elapsedBeforePause + Date.now() - startedAt) / 1000
+            );
+
+            const minutes = String(
+                Math.floor(elapsedSeconds / 60)
+            ).padStart(2, '0');
+
+            const seconds = String(
+                elapsedSeconds % 60
+            ).padStart(2, '0');
+
+            timeElement.textContent = `${minutes}:${seconds}`;
+        };
+
+        const drawWaveform = () => {
+            if (!analyser || !canvasContext) return;
+
+            const values = new Uint8Array(analyser.fftSize);
+
+            analyser.getByteTimeDomainData(values);
+
+            const width = canvas.width;
+            const height = canvas.height;
+
+            canvasContext.clearRect(0, 0, width, height);
+
+            canvasContext.strokeStyle = getComputedStyle(
+                document.documentElement
+            )
+                .getPropertyValue('--accent')
+                .trim();
+
+            canvasContext.lineWidth = 2;
+            canvasContext.beginPath();
+
+            values.forEach((value, index) => {
+                const x = (index / (values.length - 1)) * width;
+                const y = (value / 255) * height;
+
+                if (index === 0) {
+                    canvasContext.moveTo(x, y);
+                } else {
+                    canvasContext.lineTo(x, y);
+                }
+            });
+
+            canvasContext.stroke();
+
+            animationFrame = requestAnimationFrame(drawWaveform);
+        };
+
+        const stopTracksAndAudio = () => {
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+
+            if (timer) {
+                clearInterval(timer);
+                timer = null;
+            }
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach((track) => {
+                    track.stop();
+                });
+
+                mediaStream = null;
+            }
+
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close().catch(() => { });
+            }
+
+            audioContext = null;
+            analyser = null;
+            startedAt = 0;
+        };
+
+        const resetRecordingUI = () => {
+            recordButton.classList.remove('is-recording');
+
+            recordButton.setAttribute(
+                'aria-label',
+                'Record audio'
+            );
+
+            recordButton.title = 'Record audio';
+
+            pauseButton.classList.remove('is-paused');
+
+            pauseButton.setAttribute(
+                'aria-label',
+                'Pause recording'
+            );
+
+            pauseButton.title = 'Pause recording';
+
+            pauseButton.disabled = false;
+            pauseButton.hidden = false;
+
+            stopButton.disabled = false;
+
+            stopButton.classList.remove('is-record-again');
+
+            stopButton.setAttribute(
+                'aria-label',
+                'Stop recording'
+            );
+
+            stopButton.title = 'Stop recording';
+
+            recordingStatus.classList.remove('is-transcribing');
+
+            timeElement.textContent = '00:00';
+        };
+
+        const cleanupRecording = () => {
+            stopTracksAndAudio();
+
+            mediaRecorder = null;
+            recordedAudioBlob = null;
+
+            chunks = [];
+
+            cancelRequested = false;
+
+            elapsedBeforePause = 0;
+
+            recordButton.dataset.audioReady = 'false';
+
+            resetRecordingUI();
+
+            recordingStatus.textContent = 'Ready';
+
+            recordingPanel.hidden = true;
+        };
+
+        const stopRecording = () => {
+            if (
+                !mediaRecorder ||
+                mediaRecorder.state === 'inactive'
+            ) {
+                return;
+            }
+
+            mediaRecorder.stop();
+
+            recordButton.classList.remove('is-recording');
+
+            recordButton.setAttribute(
+                'aria-label',
+                'Record audio'
+            );
+
+            recordButton.title = 'Record audio';
+
+            recordingPanel.hidden = false;
+
+            recordingStatus.textContent = 'Transcribing...';
+
+            recordingStatus.classList.add('is-transcribing');
+
+            stopButton.disabled = true;
+            pauseButton.disabled = true;
+            pauseButton.hidden = true;
+
+            stopTracksAndAudio();
+        };
+
+        const cleanWhisperAudio = (audioData) => {
+            let peak = 0;
+            let firstVoiceSample = audioData.length;
+            let lastVoiceSample = 0;
+
+            const silenceThreshold = 0.012;
+
+            audioData.forEach((sample, index) => {
+                const amplitude = Math.abs(sample);
+
+                peak = Math.max(peak, amplitude);
+
+                if (amplitude > silenceThreshold) {
+                    firstVoiceSample = Math.min(
+                        firstVoiceSample,
+                        index
+                    );
+
+                    lastVoiceSample = index;
+                }
+            });
+
+            if (
+                !peak ||
+                firstVoiceSample === audioData.length
+            ) {
+                return audioData;
+            }
+
+            const padding = 16000 * 0.15;
+
+            const start = Math.max(
+                0,
+                Math.floor(firstVoiceSample - padding)
+            );
+
+            const end = Math.min(
+                audioData.length,
+                Math.ceil(lastVoiceSample + padding)
+            );
+
+            const cleaned = audioData.slice(start, end);
+
+            const gain = Math.min(
+                1.8,
+                0.75 / peak
+            );
+
+            for (
+                let index = 0;
+                index < cleaned.length;
+                index += 1
+            ) {
+                cleaned[index] = Math.max(
+                    -1,
+                    Math.min(
+                        1,
+                        cleaned[index] * gain
+                    )
+                );
+            }
+
+            return cleaned;
+        };
+
+        const convertToWhisperAudio = async (audioBuffer) => {
+            const targetSampleRate = 16000;
+
+            if (
+                audioBuffer.sampleRate === targetSampleRate &&
+                audioBuffer.numberOfChannels === 1
+            ) {
+                return cleanWhisperAudio(
+                    audioBuffer.getChannelData(0)
+                );
+            }
+
+            const targetLength = Math.ceil(
+                audioBuffer.duration * targetSampleRate
+            );
+
+            const offlineContext = new OfflineAudioContext(
+                1,
+                targetLength,
+                targetSampleRate
+            );
+
+            const source = offlineContext.createBufferSource();
+
+            const monoBuffer = offlineContext.createBuffer(
+                1,
+                audioBuffer.length,
+                audioBuffer.sampleRate
+            );
+
+            const monoChannel = monoBuffer.getChannelData(0);
+
+            for (
+                let channelIndex = 0;
+                channelIndex < audioBuffer.numberOfChannels;
+                channelIndex += 1
+            ) {
+                const channelData =
+                    audioBuffer.getChannelData(channelIndex);
+
+                for (
+                    let sampleIndex = 0;
+                    sampleIndex < channelData.length;
+                    sampleIndex += 1
+                ) {
+                    monoChannel[sampleIndex] +=
+                        channelData[sampleIndex] /
+                        audioBuffer.numberOfChannels;
+                }
+            }
+
+            source.buffer = monoBuffer;
+
+            source.connect(
+                offlineContext.destination
+            );
+
+            source.start();
+
+            const rendered =
+                await offlineContext.startRendering();
+
+            return cleanWhisperAudio(
+                rendered.getChannelData(0)
+            );
+        };
+
+        const transcribeRecording = async (audioBlob) => {
+            let audioContextForDecode = null;
+
+            try {
+                if (cancelRequested) {
+                    return;
+                }
+
+                if (!transcriptionPipeline) {
+                    if (!transcriptionPromise) {
+                        const transformers = await import(
+                            '/static/Note/transformers.bundle.js'
+                        );
+
+                        transcriptionPromise =
+                            transformers.pipeline(
+                                'automatic-speech-recognition',
+                                'Xenova/whisper-tiny.en',
+                                {
+                                    device: 'wasm',
+                                    dtype: 'q8',
+
+                                    progress_callback: (
+                                        progress
+                                    ) => {
+                                        if (
+                                            cancelRequested
+                                        ) {
+                                            return;
+                                        }
+
+                                        if (
+                                            progress.status ===
+                                            'progress' &&
+                                            progress.total
+                                        ) {
+                                            const percent =
+                                                Math.round(
+                                                    (progress.loaded /
+                                                        progress.total) *
+                                                    100
+                                                );
+
+                                            recordingStatus.textContent =
+                                                `Loading model ${percent}%`;
+                                        } else if (
+                                            progress.status ===
+                                            'initiate'
+                                        ) {
+                                            recordingStatus.textContent =
+                                                'Loading Whisper model...';
+                                        }
+                                    },
+                                }
+                            );
+                    }
+
+                    transcriptionPipeline =
+                        await transcriptionPromise;
+                }
+
+                if (cancelRequested) {
+                    return;
+                }
+
+                recordingStatus.textContent =
+                    'Transcribing...';
+
+                const AudioContextClass =
+                    window.AudioContext ||
+                    window.webkitAudioContext;
+
+                audioContextForDecode =
+                    new AudioContextClass();
+
+                const audioBuffer =
+                    await audioContextForDecode.decodeAudioData(
+                        await audioBlob.arrayBuffer()
+                    );
+
+                if (cancelRequested) {
+                    return;
+                }
+
+                const channel =
+                    await convertToWhisperAudio(
+                        audioBuffer
+                    );
+
+                if (cancelRequested) {
+                    return;
+                }
+
+                const result =
+                    await transcriptionPipeline(
+                        channel,
+                        {
+                            chunk_length_s: 30,
+                            stride_length_s: 5,
+                            return_timestamps: false,
+                            no_speech_threshold: 0.6,
+                        }
+                    );
+
+                if (cancelRequested) {
+                    return;
+                }
+
+                const text =
+                    result?.text?.trim() ||
+                    '(No speech detected)';
+
+                if (contentInput) {
+                    const existingText =
+                        contentInput.value.trim();
+
+                    contentInput.value = existingText
+                        ? `${existingText}\n\n${text}`
+                        : text;
+
+                    contentInput.dispatchEvent(
+                        new Event('input', {
+                            bubbles: true,
+                        })
+                    );
+                }
+            } catch (error) {
+                if (!cancelRequested) {
+                    showMessage(
+                        `Transcription failed: ${error.message ||
+                        'Unknown error.'
+                        }`
+                    );
+                }
+            } finally {
+                if (
+                    audioContextForDecode &&
+                    audioContextForDecode.state !==
+                    'closed'
+                ) {
+                    audioContextForDecode
+                        .close()
+                        .catch(() => { });
+                }
+
+                if (!cancelRequested) {
+                    recordingStatus.textContent =
+                        'Recording complete';
+
+                    recordingStatus.classList.remove(
+                        'is-transcribing'
+                    );
+
+                    stopButton.disabled = false;
+
+                    stopButton.classList.add(
+                        'is-record-again'
+                    );
+
+                    stopButton.setAttribute(
+                        'aria-label',
+                        'Record again'
+                    );
+
+                    stopButton.title =
+                        'Record again';
+
+                    recordingPanel.hidden = false;
+                }
+            }
+        };
+
+        const startRecording = async () => {
+            cancelRequested = false;
+            chunks = [];
+            recordedAudioBlob = null;
+
+            const AudioContextClass =
+                window.AudioContext ||
+                window.webkitAudioContext;
+
+            if (
+                !navigator.mediaDevices?.getUserMedia ||
+                !window.MediaRecorder ||
+                !AudioContextClass
+            ) {
+                showMessage(
+                    'Audio recording is not supported in this browser.'
+                );
+
+                return;
+            }
+
+            try {
+                mediaStream =
+                    await navigator.mediaDevices.getUserMedia(
+                        {
+                            audio: {
+                                channelCount: 1,
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true,
+                            },
+                        }
+                    );
+
+                mediaRecorder =
+                    new MediaRecorder(mediaStream);
+
+                mediaRecorder.addEventListener(
+                    'dataavailable',
+                    (event) => {
+                        if (event.data.size) {
+                            chunks.push(event.data);
+                        }
+                    }
+                );
+
+                mediaRecorder.addEventListener(
+                    'stop',
+                    () => {
+                        if (cancelRequested) {
+                            cleanupRecording();
+                            return;
+                        }
+
+                        recordedAudioBlob =
+                            new Blob(chunks, {
+                                type:
+                                    mediaRecorder.mimeType ||
+                                    'audio/webm',
+                            });
+
+                        recordButton.dataset.audioReady =
+                            'true';
+
+                        const blobToTranscribe =
+                            recordedAudioBlob;
+
+                        chunks = [];
+
+                        transcribeRecording(
+                            blobToTranscribe
+                        );
+                    }
+                );
+
+                audioContext =
+                    new AudioContextClass();
+
+                analyser =
+                    audioContext.createAnalyser();
+
+                analyser.fftSize = 256;
+
+                audioContext
+                    .createMediaStreamSource(
+                        mediaStream
+                    )
+                    .connect(analyser);
+
+                mediaRecorder.start();
+
+                startedAt = Date.now();
+
+                elapsedBeforePause = 0;
+
+                timeElement.textContent =
+                    '00:00';
+
+                timer = setInterval(
+                    updateTime,
+                    250
+                );
+
+                recordingPanel.hidden = false;
+
+                recordingStatus.textContent =
+                    'Recording';
+
+                recordingStatus.classList.remove(
+                    'is-transcribing'
+                );
+
+                stopButton.disabled = false;
+
+                pauseButton.disabled = false;
+
+                pauseButton.hidden = false;
+
+                stopButton.classList.remove(
+                    'is-record-again'
+                );
+
+                stopButton.setAttribute(
+                    'aria-label',
+                    'Stop recording'
+                );
+
+                stopButton.title =
+                    'Stop recording';
+
+                pauseButton.classList.remove(
+                    'is-paused'
+                );
+
+                pauseButton.setAttribute(
+                    'aria-label',
+                    'Pause recording'
+                );
+
+                pauseButton.title =
+                    'Pause recording';
+
+                recordButton.classList.add(
+                    'is-recording'
+                );
+
+                recordButton.setAttribute(
+                    'aria-label',
+                    'Stop recording'
+                );
+
+                recordButton.title =
+                    'Stop recording';
+
+                drawWaveform();
+            } catch (error) {
+                stopTracksAndAudio();
+
+                mediaRecorder = null;
+
+                if (
+                    error.name ===
+                    'NotAllowedError'
+                ) {
+                    showMessage(
+                        'Microphone permission was denied.'
+                    );
+                } else {
+                    showMessage(
+                        'The microphone could not be started.'
+                    );
+                }
+            }
+        };
+
+        recordButton.addEventListener(
+            'click',
+            () => {
+                if (
+                    mediaRecorder?.state ===
+                    'recording'
+                ) {
+                    stopRecording();
+                } else {
+                    startRecording();
+                }
+            }
+        );
+
+        pauseButton.addEventListener(
+            'click',
+            () => {
+                if (
+                    !mediaRecorder ||
+                    mediaRecorder.state ===
+                    'inactive'
+                ) {
+                    return;
+                }
+
+                if (
+                    mediaRecorder.state ===
+                    'recording'
+                ) {
+                    mediaRecorder.pause();
+
+                    elapsedBeforePause +=
+                        Date.now() - startedAt;
+
+                    if (timer) {
+                        clearInterval(timer);
+                        timer = null;
+                    }
+
+                    recordingStatus.textContent =
+                        'Paused';
+
+                    pauseButton.classList.add(
+                        'is-paused'
+                    );
+
+                    pauseButton.setAttribute(
+                        'aria-label',
+                        'Resume recording'
+                    );
+
+                    pauseButton.title =
+                        'Resume recording';
+                } else if (
+                    mediaRecorder.state ===
+                    'paused'
+                ) {
+                    mediaRecorder.resume();
+
+                    startedAt = Date.now();
+
+                    timer = setInterval(
+                        updateTime,
+                        250
+                    );
+
+                    recordingStatus.textContent =
+                        'Recording';
+
+                    pauseButton.classList.remove(
+                        'is-paused'
+                    );
+
+                    pauseButton.setAttribute(
+                        'aria-label',
+                        'Pause recording'
+                    );
+
+                    pauseButton.title =
+                        'Pause recording';
+                }
+            }
+        );
+
+        stopButton.addEventListener(
+            'click',
+            () => {
+                if (
+                    stopButton.classList.contains(
+                        'is-record-again'
+                    )
+                ) {
+                    startRecording();
+                } else {
+                    stopRecording();
+                }
+            }
+        );
+
+        if (cancelButton) {
+            cancelButton.addEventListener(
+                'click',
+                () => {
+                    cancelRequested = true;
+
+                    if (
+                        mediaRecorder &&
+                        mediaRecorder.state !==
+                        'inactive'
+                    ) {
+                        mediaRecorder.stop();
+                    } else {
+                        cleanupRecording();
+                    }
+                }
+            );
+        }
+    };
+
+    const initializeQuickVoice = () => {
+        const trigger = document.querySelector('[data-quick-voice]');
+        const panel = document.querySelector('[data-quick-recording-panel]');
+        const stopButton = document.querySelector('[data-quick-recording-stop]');
+        const timeElement = document.querySelector('[data-quick-recording-time]');
+        const canvas = document.querySelector('[data-quick-recording-waveform]');
+        const statusElement = document.querySelector('[data-quick-recording-status]');
+        const errorElement = document.querySelector('[data-quick-recording-error]');
+        const cancelButton = document.querySelector('[data-quick-recording-cancel]');
+
+        if (!trigger || !panel || !stopButton || !timeElement || !canvas) return;
 
         let mediaRecorder;
         let mediaStream;
@@ -356,23 +1182,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         let animationFrame;
         let timer;
         let startedAt;
-        let recordedAudioBlob = null;
         let transcriptionPipeline;
         let transcriptionPromise;
-        let elapsedBeforePause = 0;
+        let cancelRequested = false;
+
         const canvasContext = canvas.getContext('2d');
 
-        const showMessage = (message) => {
-            if (errorElement) errorElement.textContent = message;
-            const status = document.querySelector('[data-storage-status]');
-            if (status) {
-                status.textContent = message;
-                status.classList.add('is-error');
-            }
+        const showError = (message) => {
+            errorElement.textContent = message;
+            statusElement.textContent = 'Recording failed';
         };
 
         const updateTime = () => {
-            const elapsedSeconds = Math.floor((elapsedBeforePause + Date.now() - startedAt) / 1000);
+            const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
             const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, '0');
             const seconds = String(elapsedSeconds % 60).padStart(2, '0');
             timeElement.textContent = `${minutes}:${seconds}`;
@@ -380,160 +1202,186 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const drawWaveform = () => {
             if (!analyser) return;
+
             const values = new Uint8Array(analyser.fftSize);
             analyser.getByteTimeDomainData(values);
-            const width = canvas.width;
-            const height = canvas.height;
-            canvasContext.clearRect(0, 0, width, height);
-            canvasContext.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+
+            canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+            canvasContext.strokeStyle =
+                getComputedStyle(document.documentElement)
+                    .getPropertyValue('--accent')
+                    .trim();
+
             canvasContext.lineWidth = 2;
             canvasContext.beginPath();
+
             values.forEach((value, index) => {
-                const x = (index / (values.length - 1)) * width;
-                const y = ((value / 255) * height);
+                const x = (index / (values.length - 1)) * canvas.width;
+                const y = (value / 255) * canvas.height;
+
                 if (index === 0) canvasContext.moveTo(x, y);
                 else canvasContext.lineTo(x, y);
             });
+
             canvasContext.stroke();
             animationFrame = requestAnimationFrame(drawWaveform);
         };
 
-        const stopTracksAndAudio = () => {
+        const cleanup = () => {
             if (animationFrame) cancelAnimationFrame(animationFrame);
             if (timer) clearInterval(timer);
+
             mediaStream?.getTracks().forEach((track) => track.stop());
-            if (audioContext && audioContext.state !== 'closed') audioContext.close();
+
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close();
+            }
+
             mediaStream = null;
             audioContext = null;
             analyser = null;
         };
 
-        const stopRecording = () => {
-            if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
-            mediaRecorder.stop();
-            recordButton.classList.remove('is-recording');
-            recordButton.setAttribute('aria-label', 'Record audio');
-            recordButton.title = 'Record audio';
-            recordingPanel.hidden = false;
-            recordingStatus.textContent = 'Transcribing...';
-            recordingStatus.classList.add('is-transcribing');
-            stopButton.disabled = true;
-            pauseButton.disabled = true;
-            pauseButton.hidden = true;
-            stopTracksAndAudio();
-        };
-
-        const transcribeRecording = async (audioBlob) => {
+        const transcribe = async (audioBlob) => {
             try {
+                statusElement.textContent = 'Loading Whisper...';
+
                 if (!transcriptionPipeline) {
                     if (!transcriptionPromise) {
-                        const transformers = await import('/static/Note/transformers.bundle.js');
+                        const transformers = await import(
+                            '/static/Note/transformers.bundle.js'
+                        );
+
                         transcriptionPromise = transformers.pipeline(
                             'automatic-speech-recognition',
                             'Xenova/whisper-tiny.en',
                             {
                                 device: 'wasm',
                                 dtype: 'q8',
-                                progress_callback: (progress) => {
-                                    if (progress.status === 'progress' && progress.total) {
-                                        const percent = Math.round((progress.loaded / progress.total) * 100);
-                                        recordingStatus.textContent = `Loading model ${percent}%`;
-                                    } else if (progress.status === 'initiate') {
-                                        recordingStatus.textContent = 'Loading Whisper model...';
-                                    }
-                                },
                             },
                         );
                     }
+
                     transcriptionPipeline = await transcriptionPromise;
                 }
-                recordingStatus.textContent = 'Transcribing...';
-                const audioContextForDecode = new (window.AudioContext || window.webkitAudioContext)();
-                const audioBuffer = await audioContextForDecode.decodeAudioData(await audioBlob.arrayBuffer());
-                const channel = await convertToWhisperAudio(audioBuffer);
-                const result = await transcriptionPipeline(channel, {
-                    chunk_length_s: 30,
-                    stride_length_s: 5,
-                    return_timestamps: false,
-                    no_speech_threshold: 0.6,
-                });
-                if (audioContextForDecode.state !== 'closed') audioContextForDecode.close();
-                const text = result?.text?.trim() || '(No speech detected)';
-                if (contentInput) {
-                    const existingText = contentInput.value.trim();
-                    contentInput.value = existingText ? `${existingText}\n\n${text}` : text;
-                    contentInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+                statusElement.textContent = 'Transcribing...';
+
+                const audioContextForDecode =
+                    new (window.AudioContext || window.webkitAudioContext)();
+
+                const audioBuffer =
+                    await audioContextForDecode.decodeAudioData(
+                        await audioBlob.arrayBuffer()
+                    );
+
+                const targetSampleRate = 16000;
+                const targetLength = Math.ceil(
+                    audioBuffer.duration * targetSampleRate
+                );
+
+                const offlineContext = new OfflineAudioContext(
+                    1,
+                    targetLength,
+                    targetSampleRate
+                );
+
+                const source = offlineContext.createBufferSource();
+
+                const monoBuffer = offlineContext.createBuffer(
+                    1,
+                    audioBuffer.length,
+                    audioBuffer.sampleRate
+                );
+
+                const monoChannel = monoBuffer.getChannelData(0);
+
+                for (
+                    let channelIndex = 0;
+                    channelIndex < audioBuffer.numberOfChannels;
+                    channelIndex += 1
+                ) {
+                    const channelData =
+                        audioBuffer.getChannelData(channelIndex);
+
+                    for (
+                        let sampleIndex = 0;
+                        sampleIndex < channelData.length;
+                        sampleIndex += 1
+                    ) {
+                        monoChannel[sampleIndex] +=
+                            channelData[sampleIndex] /
+                            audioBuffer.numberOfChannels;
+                    }
                 }
+
+                source.buffer = monoBuffer;
+                source.connect(offlineContext.destination);
+                source.start();
+
+                const rendered = await offlineContext.startRendering();
+
+                const result = await transcriptionPipeline(
+                    rendered.getChannelData(0),
+                    {
+                        chunk_length_s: 30,
+                        stride_length_s: 5,
+                        return_timestamps: false,
+                        no_speech_threshold: 0.6,
+                    }
+                );
+
+                if (audioContextForDecode.state !== 'closed') {
+                    audioContextForDecode.close();
+                }
+
+                const text = result?.text?.trim();
+
+                if (!text) {
+                    throw new Error('No speech was detected.');
+                }
+
+                // Create the local note.
+                const note = storage.createNote(
+                    text.slice(0, 60),
+                    text
+                );
+
+                panel.hidden = true;
+                cleanup();
+
+                renderList();
+
+                // Open the newly created note.
+                window.location.href = noteUrl(note.id);
+
             } catch (error) {
-                showMessage(`Transcription failed: ${error.message || 'Unknown error.'}`);
-            } finally {
-                recordingStatus.textContent = 'Recording complete';
-                recordingStatus.classList.remove('is-transcribing');
+                cleanup();
+                showError(
+                    `Transcription failed: ${error.message || 'Unknown error.'}`
+                );
                 stopButton.disabled = false;
-                stopButton.classList.add('is-record-again');
-                stopButton.setAttribute('aria-label', 'Record again');
-                stopButton.title = 'Record again';
             }
-        };
-
-        const convertToWhisperAudio = async (audioBuffer) => {
-            const targetSampleRate = 16000;
-            if (audioBuffer.sampleRate === targetSampleRate && audioBuffer.numberOfChannels === 1) {
-                return cleanWhisperAudio(audioBuffer.getChannelData(0));
-            }
-
-            const targetLength = Math.ceil(audioBuffer.duration * targetSampleRate);
-            const offlineContext = new OfflineAudioContext(1, targetLength, targetSampleRate);
-            const source = offlineContext.createBufferSource();
-            const monoBuffer = offlineContext.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate);
-            const monoChannel = monoBuffer.getChannelData(0);
-            for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex += 1) {
-                const channelData = audioBuffer.getChannelData(channelIndex);
-                for (let sampleIndex = 0; sampleIndex < channelData.length; sampleIndex += 1) {
-                    monoChannel[sampleIndex] += channelData[sampleIndex] / audioBuffer.numberOfChannels;
-                }
-            }
-            source.buffer = monoBuffer;
-            source.connect(offlineContext.destination);
-            source.start();
-            const rendered = await offlineContext.startRendering();
-            return cleanWhisperAudio(rendered.getChannelData(0));
-        };
-
-        const cleanWhisperAudio = (audioData) => {
-            let peak = 0;
-            let firstVoiceSample = audioData.length;
-            let lastVoiceSample = 0;
-            const silenceThreshold = 0.012;
-
-            audioData.forEach((sample, index) => {
-                const amplitude = Math.abs(sample);
-                peak = Math.max(peak, amplitude);
-                if (amplitude > silenceThreshold) {
-                    firstVoiceSample = Math.min(firstVoiceSample, index);
-                    lastVoiceSample = index;
-                }
-            });
-
-            if (!peak || firstVoiceSample === audioData.length) return audioData;
-            const padding = 16000 * 0.15;
-            const start = Math.max(0, Math.floor(firstVoiceSample - padding));
-            const end = Math.min(audioData.length, Math.ceil(lastVoiceSample + padding));
-            const cleaned = audioData.slice(start, end);
-            const gain = Math.min(1.8, 0.75 / peak);
-            for (let index = 0; index < cleaned.length; index += 1) {
-                cleaned[index] = Math.max(-1, Math.min(1, cleaned[index] * gain));
-            }
-            return cleaned;
         };
 
         const startRecording = async () => {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder || !AudioContextClass) {
-                showMessage('Audio recording is not supported in this browser.');
+            cancelRequested = false;
+
+            const AudioContextClass =
+                window.AudioContext || window.webkitAudioContext;
+
+            if (
+                !navigator.mediaDevices?.getUserMedia ||
+                !window.MediaRecorder ||
+                !AudioContextClass
+            ) {
+                showError('Audio recording is not supported in this browser.');
                 return;
             }
+
             try {
+                errorElement.textContent = '';
+
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         channelCount: 1,
@@ -542,72 +1390,87 @@ document.addEventListener('DOMContentLoaded', async () => {
                         autoGainControl: true,
                     },
                 });
+
                 const chunks = [];
+
                 mediaRecorder = new MediaRecorder(mediaStream);
+
                 mediaRecorder.addEventListener('dataavailable', (event) => {
-                    if (event.data.size) chunks.push(event.data);
+                    if (event.data.size) {
+                        chunks.push(event.data);
+                    }
                 });
-                mediaRecorder.addEventListener('stop', () => {
-                    recordedAudioBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-                    recordButton.dataset.audioReady = 'true';
-                    transcribeRecording(recordedAudioBlob);
+
+                mediaRecorder.addEventListener('stop', async () => {
+                    if (cancelRequested) {
+                        cancelRequested = false;
+                        chunks = [];
+                        cleanup();
+                        return;
+                    }
+
+                    const audioBlob = new Blob(chunks, {
+                        type: mediaRecorder.mimeType
+                    });
+
+                    chunks = [];
+
+                    await transcribe(audioBlob);
                 });
+
                 audioContext = new AudioContextClass();
                 analyser = audioContext.createAnalyser();
                 analyser.fftSize = 256;
-                audioContext.createMediaStreamSource(mediaStream).connect(analyser);
+
+                audioContext
+                    .createMediaStreamSource(mediaStream)
+                    .connect(analyser);
+
                 mediaRecorder.start();
+
                 startedAt = Date.now();
                 timeElement.textContent = '00:00';
                 timer = setInterval(updateTime, 250);
-                recordingPanel.hidden = false;
-                recordingStatus.textContent = 'Recording';
-                recordingStatus.classList.remove('is-transcribing');
+
+                panel.hidden = false;
+                statusElement.textContent = 'Recording';
                 stopButton.disabled = false;
-                pauseButton.disabled = false;
-                pauseButton.hidden = false;
-                stopButton.classList.remove('is-record-again');
-                stopButton.setAttribute('aria-label', 'Stop recording');
-                stopButton.title = 'Stop recording';
-                elapsedBeforePause = 0;
-                pauseButton.classList.remove('is-paused');
-                recordButton.classList.add('is-recording');
-                recordButton.setAttribute('aria-label', 'Stop recording');
-                recordButton.title = 'Stop recording';
+
                 drawWaveform();
+
             } catch (error) {
-                stopTracksAndAudio();
-                showMessage(error.name === 'NotAllowedError' ? 'Microphone permission was denied.' : 'The microphone could not be started.');
+                cleanup();
+
+                showError(
+                    error.name === 'NotAllowedError'
+                        ? 'Microphone permission was denied.'
+                        : 'The microphone could not be started.'
+                );
             }
         };
 
-        recordButton.addEventListener('click', () => {
-            if (mediaRecorder?.state === 'recording') stopRecording();
-            else startRecording();
-        });
-        pauseButton.addEventListener('click', () => {
+        const stopRecording = () => {
             if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
-            if (mediaRecorder.state === 'recording') {
-                mediaRecorder.pause();
-                elapsedBeforePause += Date.now() - startedAt;
-                clearInterval(timer);
-                recordingStatus.textContent = 'Paused';
-                pauseButton.classList.add('is-paused');
-                pauseButton.setAttribute('aria-label', 'Resume recording');
-                pauseButton.title = 'Resume recording';
-            } else if (mediaRecorder.state === 'paused') {
-                mediaRecorder.resume();
-                startedAt = Date.now();
-                timer = setInterval(updateTime, 250);
-                recordingStatus.textContent = 'Recording';
-                pauseButton.classList.remove('is-paused');
-                pauseButton.setAttribute('aria-label', 'Pause recording');
-                pauseButton.title = 'Pause recording';
+
+            mediaRecorder.stop();
+            cleanup();
+
+            statusElement.textContent = 'Transcribing...';
+            stopButton.disabled = true;
+        };
+
+        trigger.addEventListener('click', startRecording);
+
+        stopButton.addEventListener('click', stopRecording);
+        cancelButton.addEventListener('click', () => {
+            cancelRequested = true;
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            } else {
+                panel.hidden = true;
+                cleanup();
             }
-        });
-        stopButton.addEventListener('click', () => {
-            if (stopButton.classList.contains('is-record-again')) startRecording();
-            else stopRecording();
         });
     };
 
@@ -654,6 +1517,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initializeTheme();
     initializeAudioRecorder();
+    initializeQuickVoice()
     const refreshList = initializeList();
     initializeEditor();
     initializeDetail();

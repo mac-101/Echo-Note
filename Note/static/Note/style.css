@@ -83,11 +83,46 @@ button, .button, .text-action, .icon-button { -webkit-tap-highlight-color: trans
 .note-card p { color: var(--ink); font-size: 1.08rem; line-height: 1.55; margin: 0; overflow-wrap: anywhere; }
 .note-card small { display: block; font-size: .8rem; margin-top: 15px; }
 .pin-dot { color: var(--accent); font-size: 1.1rem; }
-.floating-actions { bottom: 22px; display: grid; gap: 12px; position: fixed; right: max(22px, calc((100vw - 640px) / 2)); z-index: 4; }
-.floating-action { align-items: center; background: var(--surface-raised); border: 1px solid var(--line); border-radius: 50%; box-shadow: 0 8px 18px rgba(0, 0, 0, .3); color: var(--ink); display: flex; height: 58px; justify-content: center; padding: 0; transition: color .2s, opacity .2s, transform .2s; width: 58px; }
-.floating-action svg { fill: none; height: 23px; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; width: 23px; }
-.floating-note:hover { color: var(--accent); transform: scale(1.04); }
-.floating-voice { color: var(--muted); cursor: not-allowed; opacity: .6; }
+.floating-actions {
+    bottom: 22px;
+    display: grid;
+    gap: 12px;
+    position: fixed;
+    right: max(22px, calc((100vw - 640px) / 2));
+    z-index: 4;
+}
+
+.floating-action {
+    align-items: center;
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, .3);
+    color: var(--ink);
+    display: flex;
+    height: 58px;
+    justify-content: center;
+    padding: 0;
+    transition: color .2s, opacity .2s, transform .2s;
+    width: 58px;
+}
+
+.floating-action svg {
+    fill: none;
+    height: 23px;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+    width: 23px;
+}
+
+.floating-note:hover,
+.floating-voice:hover {
+    color: var(--accent);
+    transform: scale(1.04);
+}
+/* .floating-voice { color: var(--); cursor: pointer; opacity: .6; } */
 .empty-state { margin: 8vh auto 0; max-width: 360px; text-align: center; }
 .empty-icon { align-items: center; background: var(--surface-raised); border-radius: 16px; color: var(--accent); display: flex; font-size: 1.6rem; height: 56px; justify-content: center; margin: 0 auto 20px; width: 56px; }
 .empty-state h2 { font-size: 1.35rem; letter-spacing: -.02em; margin-bottom: 7px; }
@@ -144,6 +179,120 @@ button, .button, .text-action, .icon-button { -webkit-tap-highlight-color: trans
 .recording-status { color: var(--muted); font-size: .78rem; white-space: nowrap; }
 .recording-status.is-transcribing { color: var(--accent); }
 .recording-error { color: var(--danger); font-size: .8rem; margin: 10px 0 0; min-height: 1.2em; }
+/* Quick Voice Note — centered overlay */
+.quick-recording-panel {
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    box-shadow:
+            0 0 0 100vmax rgba(0, 0, 0, .48),
+            0 24px 70px rgba(0, 0, 0, .45);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    left: 50%;
+    max-width: 360px;
+    padding: 30px 24px 24px;
+    position: fixed;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: calc(100vw - 40px);
+    z-index: 100;
+}
+
+.quick-recording-panel[hidden] {
+    display: none;
+}
+
+.quick-recording-panel h2 {
+    color: var(--ink);
+    font-size: 1.05rem;
+    font-weight: 650;
+    letter-spacing: -.02em;
+    margin: 0;
+}
+
+.quick-recording-info {
+    align-items: center;
+    display: flex;
+    gap: 9px;
+}
+
+.quick-recording-info time {
+    color: var(--ink);
+    font-size: 1rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.quick-recording-panel .recording-dot {
+    animation: quick-recording-pulse 1.2s ease-in-out infinite;
+    height: 9px;
+    width: 9px;
+}
+
+.quick-recording-panel .recording-waveform {
+    height: 64px;
+    width: 100%;
+}
+
+.quick-recording-panel .recording-status {
+    font-size: .82rem;
+}
+
+.quick-recording-panel .recording-actions {
+    justify-content: center;
+    margin-top: 2px;
+}
+
+.quick-recording-panel .recording-stop {
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .25);
+    height: 52px;
+    width: 52px;
+}
+
+.quick-recording-panel .recording-stop svg {
+    height: 21px;
+    width: 21px;
+}
+
+.quick-recording-panel .recording-stop:hover {
+    transform: scale(1.04);
+}
+
+.quick-recording-panel::before {
+    background: var(--accent);
+    border-radius: 999px;
+    content: "";
+    height: 4px;
+    position: absolute;
+    top: 10px;
+    width: 34px;
+}
+
+.quick-recording-panel ~ .recording-error {
+    left: 50%;
+    margin: 0;
+    position: fixed;
+    text-align: center;
+    top: calc(50% + 150px);
+    transform: translateX(-50%);
+    width: min(360px, calc(100vw - 40px));
+    z-index: 101;
+}
+
+@keyframes quick-recording-pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: .4;
+        transform: scale(.8);
+    }
+}
 @keyframes recording-pulse { 50% { opacity: .45; } }
 .field-group label { color: var(--muted); font-size: .78rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .field-group input, .field-group textarea { background: transparent; border: 0; color: var(--ink); outline: 0; padding: 14px; resize: vertical; width: 100%; }
