@@ -160,6 +160,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     const root = document.documentElement;
     const statusElements = document.querySelectorAll('[data-storage-status]');
 
+    // Pre-warm the Whisper pipeline immediately on page load to eliminate warm-up latency
+    let transcriptionPipelinePromise = null;
+    const getTranscriptionPipeline = (progressCallback) => {
+        if (!transcriptionPipelinePromise) {
+            transcriptionPipelinePromise = (async () => {
+                const transformers = await import('/static/Note/transformers.bundle.js');
+                return transformers.pipeline(
+                    'automatic-speech-recognition',
+                    'Xenova/whisper-tiny.en',
+                    {
+                        device: 'wasm',
+                        dtype: 'q8',
+                        num_threads: navigator.hardwareConcurrency || 4,
+                        progress_callback: progressCallback,
+                    }
+                );
+            })();
+        }
+        return transcriptionPipelinePromise;
+    };
+    getTranscriptionPipeline().catch(() => {});
+
+    const convertToWhisperAudio = async (audioBuffer) => {
+        const targetSampleRate = 16000;
+        if (
+            audioBuffer.sampleRate === targetSampleRate &&
+            audioBuffer.numberOfChannels === 1
+        ) {
+            return audioBuffer.getChannelData(0);
+        }
+
+        const targetLength = Math.ceil(audioBuffer.duration * targetSampleRate);
+        const offlineContext = new OfflineAudioContext(1, targetLength, targetSampleRate);
+
+        const source = offlineContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(offlineContext.destination);
+        source.start(0);
+
+        const rendered = await offlineContext.startRendering();
+        return rendered.getChannelData(0);
+    };
+
     const setStatus = (message, isError = false) => {
         statusElements.forEach((element) => {
             element.textContent = message;
@@ -369,9 +412,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         let startedAt = 0;
         let recordedAudioBlob = null;
 
-        let transcriptionPipeline = null;
-        let transcriptionPromise = null;
-
         let elapsedBeforePause = 0;
         let cancelRequested = false;
         let chunks = [];
@@ -565,138 +605,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             stopTracksAndAudio();
         };
 
-        const cleanWhisperAudio = (audioData) => {
-            let peak = 0;
-            let firstVoiceSample = audioData.length;
-            let lastVoiceSample = 0;
-
-            const silenceThreshold = 0.012;
-
-            audioData.forEach((sample, index) => {
-                const amplitude = Math.abs(sample);
-
-                peak = Math.max(peak, amplitude);
-
-                if (amplitude > silenceThreshold) {
-                    firstVoiceSample = Math.min(
-                        firstVoiceSample,
-                        index
-                    );
-
-                    lastVoiceSample = index;
-                }
-            });
-
-            if (
-                !peak ||
-                firstVoiceSample === audioData.length
-            ) {
-                return audioData;
-            }
-
-            const padding = 16000 * 0.15;
-
-            const start = Math.max(
-                0,
-                Math.floor(firstVoiceSample - padding)
-            );
-
-            const end = Math.min(
-                audioData.length,
-                Math.ceil(lastVoiceSample + padding)
-            );
-
-            const cleaned = audioData.slice(start, end);
-
-            const gain = Math.min(
-                1.8,
-                0.75 / peak
-            );
-
-            for (
-                let index = 0;
-                index < cleaned.length;
-                index += 1
-            ) {
-                cleaned[index] = Math.max(
-                    -1,
-                    Math.min(
-                        1,
-                        cleaned[index] * gain
-                    )
-                );
-            }
-
-            return cleaned;
-        };
-
-        const convertToWhisperAudio = async (audioBuffer) => {
-            const targetSampleRate = 16000;
-
-            if (
-                audioBuffer.sampleRate === targetSampleRate &&
-                audioBuffer.numberOfChannels === 1
-            ) {
-                return cleanWhisperAudio(
-                    audioBuffer.getChannelData(0)
-                );
-            }
-
-            const targetLength = Math.ceil(
-                audioBuffer.duration * targetSampleRate
-            );
-
-            const offlineContext = new OfflineAudioContext(
-                1,
-                targetLength,
-                targetSampleRate
-            );
-
-            const source = offlineContext.createBufferSource();
-
-            const monoBuffer = offlineContext.createBuffer(
-                1,
-                audioBuffer.length,
-                audioBuffer.sampleRate
-            );
-
-            const monoChannel = monoBuffer.getChannelData(0);
-
-            for (
-                let channelIndex = 0;
-                channelIndex < audioBuffer.numberOfChannels;
-                channelIndex += 1
-            ) {
-                const channelData =
-                    audioBuffer.getChannelData(channelIndex);
-
-                for (
-                    let sampleIndex = 0;
-                    sampleIndex < channelData.length;
-                    sampleIndex += 1
-                ) {
-                    monoChannel[sampleIndex] +=
-                        channelData[sampleIndex] /
-                        audioBuffer.numberOfChannels;
-                }
-            }
-
-            source.buffer = monoBuffer;
-
-            source.connect(
-                offlineContext.destination
-            );
-
-            source.start();
-
-            const rendered =
-                await offlineContext.startRendering();
-
-            return cleanWhisperAudio(
-                rendered.getChannelData(0)
-            );
-        };
-
         const transcribeRecording = async (audioBlob) => {
             let audioContextForDecode = null;
 
@@ -705,58 +613,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return;
                 }
 
-                if (!transcriptionPipeline) {
-                    if (!transcriptionPromise) {
-                        const transformers = await import(
-                            '/static/Note/transformers.bundle.js'
-                        );
-
-                        transcriptionPromise =
-                            transformers.pipeline(
-                                'automatic-speech-recognition',
-                                'Xenova/whisper-tiny.en',
-                                {
-                                    device: 'wasm',
-                                    dtype: 'q8',
-
-                                    progress_callback: (
-                                        progress
-                                    ) => {
-                                        if (
-                                            cancelRequested
-                                        ) {
-                                            return;
-                                        }
-
-                                        if (
-                                            progress.status ===
-                                            'progress' &&
-                                            progress.total
-                                        ) {
-                                            const percent =
-                                                Math.round(
-                                                    (progress.loaded /
-                                                        progress.total) *
-                                                    100
-                                                );
-
-                                            recordingStatus.textContent =
-                                                `Loading model ${percent}%`;
-                                        } else if (
-                                            progress.status ===
-                                            'initiate'
-                                        ) {
-                                            recordingStatus.textContent =
-                                                'Loading Whisper model...';
-                                        }
-                                    },
-                                }
-                            );
+                const transcriptionPipeline = await getTranscriptionPipeline((progress) => {
+                    if (cancelRequested) return;
+                    if (progress.status === 'progress' && progress.total) {
+                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                        recordingStatus.textContent = `Loading model ${percent}%`;
+                    } else if (progress.status === 'initiate') {
+                        recordingStatus.textContent = 'Loading Whisper model...';
                     }
-
-                    transcriptionPipeline =
-                        await transcriptionPromise;
-                }
+                });
 
                 if (cancelRequested) {
                     return;
@@ -770,7 +635,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     window.webkitAudioContext;
 
                 audioContextForDecode =
-                    new AudioContextClass();
+                    new AudioContextClass({ sampleRate: 16000 });
 
                 const audioBuffer =
                     await audioContextForDecode.decodeAudioData(
@@ -895,6 +760,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     await navigator.mediaDevices.getUserMedia(
                         {
                             audio: {
+                                sampleRate: 16000,
                                 channelCount: 1,
                                 echoCancellation: true,
                                 noiseSuppression: true,
@@ -1182,8 +1048,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         let animationFrame;
         let timer;
         let startedAt;
-        let transcriptionPipeline;
-        let transcriptionPromise;
         let cancelRequested = false;
 
         const canvasContext = canvas.getContext('2d');
@@ -1246,83 +1110,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
                 statusElement.textContent = 'Loading Whisper...';
 
-                if (!transcriptionPipeline) {
-                    if (!transcriptionPromise) {
-                        const transformers = await import(
-                            '/static/Note/transformers.bundle.js'
-                        );
-
-                        transcriptionPromise = transformers.pipeline(
-                            'automatic-speech-recognition',
-                            'Xenova/whisper-tiny.en',
-                            {
-                                device: 'wasm',
-                                dtype: 'q8',
-                            },
-                        );
-                    }
-
-                    transcriptionPipeline = await transcriptionPromise;
-                }
+                const transcriptionPipeline = await getTranscriptionPipeline();
 
                 statusElement.textContent = 'Transcribing...';
 
                 const audioContextForDecode =
-                    new (window.AudioContext || window.webkitAudioContext)();
+                    new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
                 const audioBuffer =
                     await audioContextForDecode.decodeAudioData(
                         await audioBlob.arrayBuffer()
                     );
 
-                const targetSampleRate = 16000;
-                const targetLength = Math.ceil(
-                    audioBuffer.duration * targetSampleRate
-                );
-
-                const offlineContext = new OfflineAudioContext(
-                    1,
-                    targetLength,
-                    targetSampleRate
-                );
-
-                const source = offlineContext.createBufferSource();
-
-                const monoBuffer = offlineContext.createBuffer(
-                    1,
-                    audioBuffer.length,
-                    audioBuffer.sampleRate
-                );
-
-                const monoChannel = monoBuffer.getChannelData(0);
-
-                for (
-                    let channelIndex = 0;
-                    channelIndex < audioBuffer.numberOfChannels;
-                    channelIndex += 1
-                ) {
-                    const channelData =
-                        audioBuffer.getChannelData(channelIndex);
-
-                    for (
-                        let sampleIndex = 0;
-                        sampleIndex < channelData.length;
-                        sampleIndex += 1
-                    ) {
-                        monoChannel[sampleIndex] +=
-                            channelData[sampleIndex] /
-                            audioBuffer.numberOfChannels;
-                    }
-                }
-
-                source.buffer = monoBuffer;
-                source.connect(offlineContext.destination);
-                source.start();
-
-                const rendered = await offlineContext.startRendering();
+                const channelData = await convertToWhisperAudio(audioBuffer);
 
                 const result = await transcriptionPipeline(
-                    rendered.getChannelData(0),
+                    channelData,
                     {
                         chunk_length_s: 30,
                         stride_length_s: 5,
@@ -1384,6 +1187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
+                        sampleRate: 16000,
                         channelCount: 1,
                         echoCancellation: true,
                         noiseSuppression: true,
@@ -1517,7 +1321,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initializeTheme();
     initializeAudioRecorder();
-    initializeQuickVoice()
+    initializeQuickVoice();
     const refreshList = initializeList();
     initializeEditor();
     initializeDetail();
