@@ -180,7 +180,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         return transcriptionPipelinePromise;
     };
-    getTranscriptionPipeline().catch(() => {});
+    getTranscriptionPipeline().catch(() => { });
 
     const convertToWhisperAudio = async (audioBuffer) => {
         const targetSampleRate = 16000;
@@ -1195,7 +1195,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     },
                 });
 
-                const chunks = [];
+                let chunks = [];
 
                 mediaRecorder = new MediaRecorder(mediaStream);
 
@@ -1256,11 +1256,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const stopRecording = () => {
             if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
 
-            mediaRecorder.stop();
-            cleanup();
-
             statusElement.textContent = 'Transcribing...';
             stopButton.disabled = true;
+
+            mediaRecorder.stop();
         };
 
         trigger.addEventListener('click', startRecording);
